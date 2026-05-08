@@ -3,7 +3,7 @@
 > **版本 Version：** v1.4  
 > **日期 Date：** 2026-05-08  
 > **語言 Language：** 中英對照 / Chinese–English Bilingual  
-> **作者 Author：** _(TyL / Fill in your name)_
+> **作者 Author：** _(TyL)_
 
 ---
 
