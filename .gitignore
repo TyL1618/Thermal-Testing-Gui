@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+.venv/
+*.docx
+*.xlsx
+test_data/
+*.json
+.DS_Store
+Thumbs.db
