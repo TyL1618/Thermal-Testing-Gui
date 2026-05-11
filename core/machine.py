@@ -1,5 +1,5 @@
 """
-machine.py  ─  Thermal Testing Machine Communication Layer
+machine.py
 
 封包格式（528 bytes）：
   buf[0~3]   = CRC / Header (Little-Endian uint32)
@@ -66,7 +66,7 @@ LVDT_AD_TO_MM: float = +0.000867
 
 
 # ─────────────────────────────────────────────────────────
-#  CRC 計算（
+#  CRC 計算
 # ─────────────────────────────────────────────────────────
 def _calc_crc(buf: bytearray) -> bytes:
     num = 0
@@ -89,9 +89,9 @@ def _calc_crc(buf: bytearray) -> bytes:
 
 
 def _build_read_packet() -> bytes:
-    """建立標準讀取封包（與Reference software Wireshark 抓包格式完全一致）
+    """建立標準讀取封包（與原廠軟體 Wireshark 抓包格式完全一致）
 
-    Wireshark 確認：Reference software送出的 TCP payload 開頭為：
+    Wireshark 確認：原廠軟體送出的 TCP payload 開頭為：
         52 44 fb 00  52 44 fb 00  00 00 00 00 ...
     buf[0~3] = 52 44 fb 00（固定 header，非計算 CRC）
     buf[4~5] = 52 44（CMD_READ）
@@ -123,11 +123,12 @@ class ChannelData:
         self.deflection_limit = 0.25   # mm
 
 
-class TestingMachine(QObject):
+class GotechMachine(QObject):
     data_updated      = pyqtSignal(list)
     status_updated    = pyqtSignal(str)
     connected         = pyqtSignal(bool)
     raw_data_received = pyqtSignal(bytes)
+    reconnecting      = pyqtSignal(int)   # 發射剩餘秒數，供 UI 顯示倒數
 
     def __init__(self, host="192.168.1.100", port=1500, simulation=False):
         super().__init__()
@@ -155,24 +156,44 @@ class TestingMachine(QObject):
         if self.simulation:
             return self._start_simulation()
 
-        self.status_updated.emit(f"正在連線 {self.host}:{self.port} ...")
-        try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.settimeout(5.0)
-            self.sock.connect((self.host, self.port))
-            self.sock.settimeout(2.0)
-            #print(f"[CONNECT] 連上 {self.host}:{self.port}")
+        self.running = True
+        threading.Thread(target=self._connect_loop, daemon=True).start()
+        return True
 
-            self.connected.emit(True)
-            self.running = True
-            self.status_updated.emit(f"✅ 連線成功  {self.host}:{self.port}")
-            threading.Thread(target=self._receive_loop, daemon=True).start()
-            return True
+    def _connect_loop(self):
+        """持續嘗試連線，斷線後自動倒數重連"""
+        RETRY_SECONDS = 5
 
-        except Exception as e:
-            self.status_updated.emit(f"❌ 連線失敗: {e}")
-            self.connected.emit(False)
-            return False
+        while self.running:
+            self._safe_emit_status(f"正在連線 {self.host}:{self.port} ...")
+            try:
+                self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.sock.settimeout(5.0)
+                self.sock.connect((self.host, self.port))
+                self.sock.settimeout(2.0)
+
+                self._safe_emit_connected(True)
+                self._safe_emit_status(f"✅ 連線成功  {self.host}:{self.port}")
+
+                # 進入接收迴圈，斷線才會 return 回來
+                self._receive_loop()
+
+            except Exception as e:
+                self._safe_emit_status(f"❌ 連線失敗: {e}")
+                self._safe_emit_connected(False)
+
+            # 斷線或連線失敗後倒數重連
+            if not self.running:
+                break
+            for i in range(RETRY_SECONDS, 0, -1):
+                if not self.running:
+                    break
+                self._safe_emit_status(f"⚠️ 連線中斷，將在 {i} 秒後重新連線...")
+                try:
+                    self.reconnecting.emit(i)
+                except RuntimeError:
+                    return
+                time.sleep(1)
 
     def disconnect(self):
         self.running = False
@@ -335,8 +356,8 @@ class TestingMachine(QObject):
     def zero(self):
         """LVDT 軟體歸零：以目前的 AD 原始值為基準點，後續顯示差值。
         
-        確認：Reference software按 ZERO 時也只是軟體記錄基準，不送 WRITE 指令。
-        Wireshark 抓包顯示Reference software全程只送讀取封包。
+        確認：原廠軟體按 ZERO 時也只是軟體記錄基準，不送 WRITE 指令。
+        Wireshark 抓包顯示原廠軟體全程只送讀取封包。
         """
         for ch in self.channels:
             ch.zero_ref_ad = ch.raw_ad   # 記住當前 AD 為基準

@@ -1,8 +1,8 @@
 """
-login_panel.py  ─  Thermal Testing System 登入頁面
+login_panel.py  ─  Re_HV3000 登入頁面
 
 帳號資料（硬編碼開發者模式，正式版請接資料庫）：
-  - 帳號：admin   密碼：123abc   顯示名稱：Demo User
+  - 帳號：demo   密碼：123456   顯示名稱：開發者模式
 """
 from __future__ import annotations
 import hashlib
@@ -35,9 +35,9 @@ C = {
 
 # ── 硬編碼帳號（sha256 比對，原始密碼不明文存在記憶體）
 # 格式：{ 帳號小寫: (顯示名稱, 密碼 sha256) }
-_PWD_SHA256 = hashlib.sha256(b"123abc").hexdigest()
+_PWD_SHA256 = hashlib.sha256(b"123456").hexdigest()
 _ACCOUNTS: dict[str, tuple[str, str]] = {
-    "admin": ("Demo User", _PWD_SHA256),
+    "demo": ("開發者模式", _PWD_SHA256),
 }
 
 
@@ -137,7 +137,7 @@ class LoginPanel(QWidget):
         card_lay.setSpacing(16)
 
         # Logo / 標題
-        logo = _label("ThermalTest", C['amber'], size=22, bold=True, spacing=4)
+        logo = _label("HV Test", C['amber'], size=22, bold=True, spacing=4)
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         card_lay.addWidget(logo)
 

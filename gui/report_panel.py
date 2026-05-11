@@ -1,5 +1,5 @@
 """
-report_panel.py  ─  Thermal Testing System 報告頁面
+report_panel.py  ─  GOTECH HV3000 報告頁面
 
 功能：
   1. 左側：選擇測試記錄（列表）+ 詳細資訊預覽
@@ -34,7 +34,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRegularExpression
 from PyQt6.QtGui import QFont, QColor, QRegularExpressionValidator
 import pyqtgraph as pg
 
-from core.machine import TestingMachine
+from core.machine import GotechMachine
 
 # ── 色彩
 C = {
@@ -155,7 +155,7 @@ class TestRecord:
 class ReportPanel(QWidget):
     """報告頁面"""
 
-    def __init__(self, machine: TestingMachine):
+    def __init__(self, machine: GotechMachine):
         super().__init__()
         self.machine = machine
         self.records: List[TestRecord] = []
@@ -410,22 +410,33 @@ class ReportPanel(QWidget):
         pg.setConfigOption('foreground', C['text_lo'])
         self.report_plot = pg.PlotWidget()
         self.report_plot.setBackground(C['bg_deep'])
-        self.report_plot.setLabel('left', '', units='mm', color=C['text_mid'], size='8pt')
-        self.report_plot.setLabel('bottom', '', units='s', color=C['text_mid'], size='8pt')
+        self.report_plot.setLabel('left', 'mm', color=C['text_mid'], size='8pt')
+        self.report_plot.setLabel('bottom', '', color=C['text_mid'], size='8pt')
         self.report_plot.showGrid(x=True, y=True, alpha=0.12)
-        self.report_plot.getAxis('left').setTextPen(C['text_lo'])
-        self.report_plot.getAxis('bottom').setTextPen(C['text_lo'])
+
+        # Y 軸：顯示 mm 並以小數精度呈現
+        left_axis = self.report_plot.getAxis('left')
+        left_axis.setTextPen(C['text_lo'])
+        left_axis.enableAutoSIPrefix(False)  # 不要自動縮放成 μ/m/k 等
+
+        # X 軸：使用自訂 tick formatter
+        self._x_axis = self.report_plot.getAxis('bottom')
+        self._x_axis.setTextPen(C['text_lo'])
+        self._x_axis.setStyle(tickTextOffset=4)
+
         self.report_curves: Dict[int, pg.PlotDataItem] = {}
         for i in range(6):
             c = self.report_plot.plot(
                 pen=pg.mkPen(color=CH_COLORS[i], width=1.5),
-                name=f' CH{i+1}',
             )
             self.report_curves[i] = c
         chart_col.addWidget(self.report_plot, stretch=1)
 
-        # 圖表模式切換
-        mode_row = QHBoxLayout()
+        # ── 圖表下方控制列：模式切換（左）＋ 自製圖例（右）
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(4)
+
+        # 模式切換
         self.rb_time_mm = QRadioButton("time-mm-°C")
         self.rb_temp_mm = QRadioButton("°C-mm")
         self.rb_time_mm.setChecked(True)
@@ -433,9 +444,30 @@ class ReportPanel(QWidget):
         bg.addButton(self.rb_time_mm)
         bg.addButton(self.rb_temp_mm)
         self.rb_time_mm.toggled.connect(self._refresh_report_plot)
-        mode_row.addWidget(self.rb_time_mm)
-        mode_row.addWidget(self.rb_temp_mm)
-        chart_col.addLayout(mode_row)
+        bottom_row.addWidget(self.rb_time_mm)
+        bottom_row.addWidget(self.rb_temp_mm)
+
+        bottom_row.addStretch()
+
+        # 自製圖例：色線 + 文字，水平排列
+        ch_names = ['CH1', 'CH2', 'CH3', 'CH4', 'CH5', 'CH6']
+        for i, (color, name) in enumerate(zip(CH_COLORS, ch_names)):
+            dot = QLabel("━")
+            dot.setStyleSheet(f"color:{color}; font-size:14px; background:transparent;")
+            dot.setFixedWidth(18)
+            bottom_row.addWidget(dot)
+            lbl = QLabel(f"{name} 變形(mm)")
+            lbl.setStyleSheet(f"""
+                color:{C['text_mid']};
+                font-family:'Consolas','Courier New',monospace;
+                font-size:9px;
+                background:transparent;
+            """)
+            bottom_row.addWidget(lbl)
+            if i < 5:
+                bottom_row.addSpacing(6)
+
+        chart_col.addLayout(bottom_row)
 
         upper.addLayout(chart_col, stretch=65)
         lay.addLayout(upper, stretch=45)
@@ -552,12 +584,59 @@ class ReportPanel(QWidget):
         """匯入至檢視器（簡化：僅在圖表顯示）"""
         self._import_to_report()
 
+    @staticmethod
+    def _make_time_ticks(total_seconds: float):
+        """
+        根據總時間長度決定 X 軸刻度格式與間隔。
+        回傳 (ticks, label_fn)：
+          ticks   — list[float]，刻度位置（秒）
+          label_fn — callable(float) -> str，格式化標籤
+        """
+        if total_seconds <= 0:
+            return [], str
+
+        # 決定刻度間隔（秒）
+        targets = [1, 2, 5, 10, 15, 20, 30,
+                   60, 120, 300, 600, 900, 1800,
+                   3600, 7200, 10800]
+        # 希望大約 6~10 個刻度
+        interval = targets[-1]
+        for t in targets:
+            if total_seconds / t <= 10:
+                interval = t
+                break
+
+        ticks = []
+        v = 0.0
+        while v <= total_seconds + 1e-6:
+            ticks.append(v)
+            v += interval
+
+        if total_seconds < 60:
+            # 顯示秒
+            label_fn = lambda s: f"{int(round(s))}s"
+        elif total_seconds < 3600:
+            # 顯示 分:秒
+            def label_fn(s):
+                m = int(s) // 60
+                sec = int(s) % 60
+                return f"{m}:{sec:02d}"
+        else:
+            # 顯示 時:分
+            def label_fn(s):
+                h = int(s) // 3600
+                m = (int(s) % 3600) // 60
+                return f"{h}:{m:02d}"
+
+        return ticks, label_fn
+
     def _refresh_report_plot(self):
         if not self._report_record:
             return
         rec = self._report_record
         use_time = self.rb_time_mm.isChecked()
 
+        all_x: List[float] = []
         for i in range(6):
             defl = rec.deflection_data.get(i, [])
             if use_time:
@@ -570,8 +649,28 @@ class ReportPanel(QWidget):
             min_len = min(len(xs), len(ys))
             if min_len > 0:
                 self.report_curves[i].setData(xs[:min_len], ys[:min_len])
+                all_x.extend(xs[:min_len])
             else:
                 self.report_curves[i].setData([], [])
+
+        # ── X 軸範圍 & 刻度（只對 time 模式套用智慧刻度）
+        if use_time and all_x:
+            t_max = max(all_x)
+            t_min = min(all_x)
+            span  = t_max - t_min if t_max > t_min else t_max
+
+            ticks, label_fn = self._make_time_ticks(span if t_min == 0 else t_max)
+
+            # 以實際資料起訖為視野，不多留空白
+            self.report_plot.setXRange(t_min, t_max, padding=0.02)
+
+            # 套用自訂刻度標籤
+            tick_strings = [(v, label_fn(v)) for v in ticks]
+            self._x_axis.setTicks([tick_strings, []])
+        else:
+            # °C 模式：恢復自動刻度
+            self.report_plot.enableAutoRange(axis='x')
+            self._x_axis.setTicks(None)
 
     def _remove_record(self):
         row = self.tbl_records.currentRow()
@@ -609,7 +708,7 @@ class ReportPanel(QWidget):
         try:
             import openpyxl
             from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-            from openpyxl.chart import LineChart, Reference
+            from openpyxl.chart import LineChart, Reference, ScatterChart, Series
             from openpyxl.chart.series import SeriesLabel
         except ImportError:
             QMessageBox.critical(
@@ -629,16 +728,29 @@ class ReportPanel(QWidget):
         ws = wb.active
         ws.title = "Report"
 
+        # ── 全局背景黑（前100列 x 20欄）
+        from openpyxl.styles import PatternFill as _PF
+        _bg = _PF("solid", fgColor="080A0D")
+        for _r in range(1, 101):
+            for _c in range(1, 42):
+                ws.cell(_r, _c).fill = _bg
+        ws.sheet_properties.tabColor = "FFC233"
+
+
         # ── 樣式定義
-        hdr_font   = Font(name="Consolas", bold=True, color="FFFFFF", size=10)
-        hdr_fill   = PatternFill("solid", fgColor="1C2028")
+        BG          = "080A0D"   # 全局背景黑
+        AMBER       = "FFC233"   # 琥珀金邊框
+        hdr_font   = Font(name="Consolas", bold=True, color="FFC233", size=10)
+        hdr_fill   = PatternFill("solid", fgColor=BG)
         title_font = Font(name="Consolas", bold=True, color="FFB300", size=13)
         key_font   = Font(name="Consolas", bold=True, color="8892A4", size=10)
         val_font   = Font(name="Consolas", color="E8EAF0", size=10)
-        tbl_hdr_fill = PatternFill("solid", fgColor="252B35")
-        tbl_row_fill = PatternFill("solid", fgColor="161A20")
-        thin = Side(style="thin", color="252B35")
-        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        tbl_hdr_fill = PatternFill("solid", fgColor=BG)
+        tbl_row_fill = PatternFill("solid", fgColor=BG)
+        bg_fill      = PatternFill("solid", fgColor=BG)
+        amber_side   = Side(style="thin", color=AMBER)
+        thin_dark    = Side(style="thin", color="1A1F2A")
+        border       = Border(left=amber_side, right=amber_side, top=amber_side, bottom=amber_side)
         center = Alignment(horizontal="center", vertical="center")
 
         def _set(row, col, value, font=None, fill=None, align=None, bdr=None):
@@ -654,8 +766,15 @@ class ReportPanel(QWidget):
         _set(1, 1,
              self.le_report_title.text() or "HDT/VICAT Test Report",
              font=title_font,
-             fill=PatternFill("solid", fgColor="0A0C0F"),
-             align=Alignment(horizontal="center", vertical="center"))
+             fill=PatternFill("solid", fgColor="080A0D"),
+             align=Alignment(horizontal="center", vertical="center"),
+             bdr=border)
+        # 合併欄 B1:K1 補上連續邊框
+        for _c in range(2, 12):
+            ws.cell(1, _c).border = Border(
+                right=amber_side if _c == 11 else None,
+                top=amber_side, bottom=amber_side
+            )
         ws.row_dimensions[1].height = 28
 
         # ── 基本資訊（列 2-10）
@@ -672,17 +791,21 @@ class ReportPanel(QWidget):
         for i, (k, v) in enumerate(info_rows, start=2):
             _set(i, 1, k, font=key_font, fill=hdr_fill, align=center, bdr=border)
             ws.merge_cells(start_row=i, start_column=2, end_row=i, end_column=4)
-            _set(i, 2, v, font=val_font, fill=PatternFill("solid", fgColor="111318"),
+            _set(i, 2, v, font=val_font, fill=PatternFill("solid", fgColor="080A0D"),
                  align=Alignment(vertical="center"), bdr=border)
+            # 合併欄的右側邊框：C、D 欄補上 amber 右邊框，保持框線連續
+            amber_r = Border(right=amber_side, top=amber_side, bottom=amber_side)
+            ws.cell(i, 3).border = amber_r
+            ws.cell(i, 4).border = Border(right=amber_side, top=amber_side, bottom=amber_side)
             ws.row_dimensions[i].height = 18
 
         # ── 空行
         blank_row = 11
 
         # ── 通道測試資料表格標頭（列 12）
+        # 對應圖片欄位：編號 寬度 深度 跨距 軟化點 應力 軟化溫度 速率
         tbl_start = blank_row + 1
-        tbl_headers = ["測試日期", "測試時間", "流水批號", "材料名稱", "測試方法",
-                       "組別", "寬度(mm)", "深度(mm)", "跨距(mm)", "變形(mm)", "負載"]
+        tbl_headers = ["編號", "寬度", "深度", "跨距", "軟化點", "應力", "軟化溫度", "速率"]
         for col, h in enumerate(tbl_headers, start=1):
             _set(tbl_start, col, h,
                  font=hdr_font, fill=tbl_hdr_fill, align=center, bdr=border)
@@ -692,9 +815,14 @@ class ReportPanel(QWidget):
         for i, ch in enumerate(rec.channels):
             r = tbl_start + 1 + i
             row_vals = [
-                rec.test_date, rec.test_time, rec.serial_no, rec.material, rec.test_method,
-                ch.get("group", "--"), ch.get("width", "--"), ch.get("depth", "--"),
-                ch.get("span", "--"), ch.get("deflection", "--"), ch.get("load", "--"),
+                i + 1,                             # 編號
+                ch.get("width",      "--"),        # 寬度
+                ch.get("depth",      "--"),        # 深度
+                ch.get("span",       "--"),        # 跨距
+                ch.get("deflection", "--"),        # 軟化點（變形量）
+                ch.get("load",       "--"),        # 應力（負載）
+                ch.get("soft_temp",  "--"),        # 軟化溫度
+                ch.get("rate",       "--"),        # 速率
             ]
             for col, val in enumerate(row_vals, start=1):
                 _set(r, col, val, font=val_font, fill=tbl_row_fill,
@@ -707,8 +835,8 @@ class ReportPanel(QWidget):
         ws2 = wb.create_sheet("ChartData")
         if rec.time_data:
             # 標頭
-            ws2.cell(1, 1, "時間(s)")
             active_ch = []
+            ws2.cell(1, 1, "時間(s)")
             for i in range(6):
                 if rec.deflection_data.get(i):
                     ws2.cell(1, 2 + len(active_ch), f"CH{i+1} 變形(mm)")
@@ -723,40 +851,70 @@ class ReportPanel(QWidget):
                     ws2.cell(r2, 2 + col_offset,
                              round(defl[idx], 4) if idx < len(defl) else None)
 
-            series_count = len(active_ch)
-            data_rows    = len(rec.time_data)
+            data_rows = len(rec.time_data)
 
-            # ── 折線圖
-            chart = LineChart()
-            chart.title  = "變形 vs 時間"
-            chart.style  = 10
-            chart.y_axis.title = "變形 (mm)"
-            chart.x_axis.title = "時間 (s)"
-            chart.height = 14
-            chart.width  = 24
+            # ── X 軸時間長度，決定格式
+            t_total = rec.time_data[-1] if rec.time_data else 0
+            if t_total < 60:
+                x_axis_title = "時間 (s)"
+                x_num_fmt    = '0.0"s"'
+            elif t_total < 3600:
+                x_axis_title = "時間 (s)"
+                x_num_fmt    = '0"s"'
+            else:
+                x_axis_title = "時間 (s)"
+                x_num_fmt    = '0"s"'
 
-            # X 軸（時間）
-            x_ref = Reference(ws2, min_col=1, min_row=2, max_row=data_rows + 1)
+            # ── 使用 ScatterChart（折線模式）：X/Y 軸都能顯示真實數值
+            from openpyxl.chart import ScatterChart, Series
+
+            chart = ScatterChart()
+            chart.title   = None
+            chart.style   = 10
+            chart.height  = 16
+            chart.width   = 28
+
+            # Y 軸：mm，小數三位，強制顯示刻度數字
+            chart.y_axis.title        = None
+            chart.y_axis.numFmt       = '0.000'
+            chart.y_axis.crosses      = "min"
+            chart.y_axis.delete       = False
+            chart.y_axis.axId         = 10
+            chart.y_axis.tickLblPos   = "low"
+            chart.y_axis.txPr         = None   # 讓 XML 修補處理旋轉
+
+            # X 軸：秒，緊貼資料不留空白，強制顯示刻度數字
+            # X 軸：秒，緊貼資料不留空白，強制顯示刻度數字
+            chart.x_axis.title         = None
+            chart.x_axis.crosses       = "autoZero"
+            chart.x_axis.delete        = False
+            chart.x_axis.axId          = 20
+            chart.x_axis.tickLblPos    = "low"   # 標籤在底部
+            chart.x_axis.scaling.min   = 0
+            chart.x_axis.scaling.max   = float(round(t_total, 3))
 
             CHART_COLORS = ["FF6B6B", "FFA94D", "69DB7C", "4FC3F7", "DA77F2", "F783AC"]
-            for col_offset, ch_i in enumerate(active_ch):
-                data_ref = Reference(ws2,
-                                     min_col=2 + col_offset,
-                                     min_row=1,          # 含標頭，讓 series 自動取名
-                                     max_row=data_rows + 1)
-                series = chart.series[col_offset] if col_offset < len(chart.series) else None
-                chart.add_data(data_ref, titles_from_data=True)
-                # 設定顏色
-                s = chart.series[-1]
-                s.graphicalProperties.line.solidFill = CHART_COLORS[ch_i % len(CHART_COLORS)]
-                s.graphicalProperties.line.width = 18000  # 1.8 pt in EMU/100
 
-            chart.set_categories(x_ref)
-            chart.shape = 4
+            x_ref = Reference(ws2, min_col=1, min_row=2, max_row=data_rows + 1)
+
+            for col_offset, ch_i in enumerate(active_ch):
+                y_ref = Reference(ws2,
+                                  min_col=2 + col_offset,
+                                  min_row=1,           # 含標頭，讓 series 自動取名
+                                  max_row=data_rows + 1)
+                ser = Series(y_ref, x_ref, title_from_data=True)
+                # 折線樣式（無標記點）
+                ser.graphicalProperties.line.solidFill = CHART_COLORS[ch_i % len(CHART_COLORS)]
+                ser.graphicalProperties.line.width = 18000   # 1.8 pt in EMU/100
+                ser.marker.symbol = "none"
+                chart.series.append(ser)
 
             # 圖表放在 Report 工作表，通道表格下方留兩列空白
+            # 標題寫在儲存格，圖表框內不顯示標題（避免卡格線）
             chart_anchor_row = data_end_row + 3
-            ws.add_chart(chart, f"A{chart_anchor_row}")
+            title_cell = ws.cell(chart_anchor_row, 1, "變形 vs 時間")
+            title_cell.font = openpyxl.styles.Font(bold=True, size=12, color="FFFFFF")
+            ws.add_chart(chart, f"A{chart_anchor_row + 1}")
 
         # ── 欄寬自動調整（Report 表）
         col_widths = [12, 10, 14, 14, 14, 8, 10, 10, 10, 10, 8]
@@ -768,9 +926,126 @@ class ReportPanel(QWidget):
         # ── 儲存
         try:
             wb.save(path)
-            QMessageBox.information(self, "完成", f"報告已匯出：\n{path}")
         except PermissionError:
             QMessageBox.critical(self, "錯誤", f"無法寫入檔案，請確認檔案未被其他程式開啟：\n{path}")
+            return
+
+        # ── 修補圖表 XML：plotArea 手動佈局 + Y 軸標題橫排
+        try:
+            import zipfile, shutil, re
+            tmp_path = path + ".tmp"
+
+            # openpyxl 實際產生的 bodyPr 標籤（無任何屬性，帶 xmlns）：
+            #   <a:bodyPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>
+            # 加上 rot="0" vert="horz" 即可讓標題橫排
+            _XMLNS_A = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+            _BODYPR_ORIG  = f'<a:bodyPr {_XMLNS_A}/>'
+            _BODYPR_HORIZ = f'<a:bodyPr {_XMLNS_A} rot="0" vert="horz"/>'
+
+            def _patch_axis_title_horiz(valax_xml: str) -> str:
+                """將 <valAx> 區段內 <title>...</title> 裡的 bodyPr 改為橫排。"""
+                m_title = re.search(r'<title>.*?</title>', valax_xml, re.DOTALL)
+                if not m_title:
+                    return valax_xml
+                title_fixed = m_title.group(0).replace(_BODYPR_ORIG, _BODYPR_HORIZ)
+                return valax_xml[:m_title.start()] + title_fixed + valax_xml[m_title.end():]
+
+            with zipfile.ZipFile(path, 'r') as zin, \
+                 zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    data = zin.read(item.filename)
+                    if re.match(r'xl/charts/chart\d+\.xml', item.filename):
+                        xml = data.decode('utf-8')
+
+                        # ── 1. 插入 plotArea 手動佈局
+                        #    x=0.25 → 圖表左邊界從 25% 開始，給 Y 軸橫排標題 + 數字足夠空間
+                        #    h=0.80 → 圖表底部留 20%，X 軸標題「時間(s)」不被截斷
+                        manual_layout = (
+                            '<c:layout>'
+                            '<c:manualLayout>'
+                            '<c:layoutTarget val="inner"/>'
+                            '<c:xMode val="edge"/>'
+                            '<c:yMode val="edge"/>'
+                            '<c:x val="0.10"/>'
+                            '<c:y val="0.10"/>'
+                            '<c:w val="0.72"/>'
+                            '<c:h val="0.80"/>'
+                        )
+                        if '<c:layout/>' in xml:
+                            xml = xml.replace('<c:layout/>', manual_layout)
+                        elif '<c:layout>' not in xml:
+                            xml = xml.replace('<c:plotArea>', '<c:plotArea>' + manual_layout, 1)
+
+                        # ── 2. 深色主題：背景 + 文字白色 + 移除外框白邊
+                        _CHART_BG = "0E1117"
+                        _NS_A = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+                        _WHITE = "FFFFFF"
+
+                        # chartSpace 整體背景 + 移除外框白邊（合併成一個 spPr）
+                        _chartspace_spPr = (
+                            f'<spPr>'
+                            f'<a:solidFill {_NS_A}><a:srgbClr val="{_CHART_BG}"/></a:solidFill>'
+                            f'<a:ln {_NS_A}><a:noFill/></a:ln>'
+                            f'</spPr>'
+                        )
+                        xml = xml.replace('<chart>', _chartspace_spPr + '<chart>', 1)
+
+                        # 繪圖區背景
+                        _plot_spPr = (
+                            f'<spPr>'
+                            f'<a:solidFill {_NS_A}><a:srgbClr val="{_CHART_BG}"/></a:solidFill>'
+                            f'</spPr>'
+                        )
+                        xml = xml.replace('</plotArea>', _plot_spPr + '</plotArea>', 1)
+
+                        # 白色文字 txPr（圖例 + 軸刻度共用）
+                        _white_txPr = (
+                            f'<txPr><a:bodyPr {_NS_A}/>'
+                            f'<a:lstStyle {_NS_A}/>'
+                            f'<a:p {_NS_A}><a:pPr><a:defRPr b="0">'
+                            f'<a:solidFill><a:srgbClr val="{_WHITE}"/></a:solidFill>'
+                            f'</a:defRPr></a:pPr></a:p></txPr>'
+                        )
+
+                        # 圖例：白色文字 + 深色背景 + 無邊框
+                        xml = xml.replace(
+                            '<legend><legendPos val="r"/></legend>',
+                            '<legend><legendPos val="r"/>' + _white_txPr +
+                            f'<spPr><a:solidFill {_NS_A}><a:srgbClr val="{_CHART_BG}"/></a:solidFill>'
+                            f'<a:ln {_NS_A}><a:noFill/></a:ln></spPr></legend>'
+                        )
+
+                        # 圖表主標題：白色文字（只替換第一個 defRPr/）
+                        xml = xml.replace(
+                            '<a:defRPr/></a:pPr>',
+                            f'<a:defRPr><a:solidFill {_NS_A}>'
+                            f'<a:srgbClr val="{_WHITE}"/></a:solidFill></a:defRPr></a:pPr>',
+                            1
+                        )
+
+                        # 軸刻度數字：白色（每個 valAx 結尾前插入 txPr）
+                        xml = xml.replace('</valAx>', _white_txPr + '</valAx>')
+
+                        # ── 3. Y 軸 title 橫排
+                        #    openpyxl ScatterChart 產生兩個 <valAx>：
+                        #      第一個 axId=10 → 時間(X軸)
+                        #      第二個 axId=20 → 變形(Y軸) ← 這個才需要橫排
+                        #    以 title 內文「變形」來定位，避免順序依賴
+                        for m_ax in re.finditer(r'<valAx\b.*?</valAx>', xml, re.DOTALL):
+                            ax_xml = m_ax.group(0)
+                            t_match = re.search(r'<a:t>(.*?)</a:t>', ax_xml)
+                            if t_match and '變形' in t_match.group(1):
+                                ax_fixed = _patch_axis_title_horiz(ax_xml)
+                                xml = xml[:m_ax.start()] + ax_fixed + xml[m_ax.end():]
+                                break
+
+                        data = xml.encode('utf-8')
+                    zout.writestr(item, data)
+            shutil.move(tmp_path, path)
+        except Exception as e:
+            print(f"[REPORT] XML 修補失敗（圖表仍可用）: {e}")
+
+        QMessageBox.information(self, "完成", f"報告已匯出：\n{path}")
 
     # ─────────────────────────────────────────────
     #  磁碟持久化（簡易 JSON）

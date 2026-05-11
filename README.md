@@ -37,6 +37,28 @@
 
 ---
 
+### Excel Report Output
+
+After a test completes, the application generates a structured `.xlsx` report with one click.
+
+The report includes two sections:
+
+**① Test Info Header** — Customer name, material, batch number, test method (e.g. HDT-ASTM), test date, and address are auto-filled from the session configuration.
+
+**② Results Table** — Per-channel softening point (°C), applied stress, span, and test speed are recorded for all 6 channels.
+
+![Excel Report - Info & Results Table](docs/screenshots/excel_table.png)
+
+---
+
+A **Deflection vs Time** waveform chart is embedded directly into the spreadsheet, plotting all active channels across the full test duration. This allows raw sensor behavior to be reviewed alongside the final numeric results without any additional tooling.
+
+![Excel Report - Waveform Chart](docs/screenshots/excel_chart.png)
+
+> The exported `.xlsx` contains two sheets: a formatted report page with the embedded chart, and a raw data sheet with the full time-series readings.
+
+---
+
 ### Live Demo (9-second clip)
 <!-- 執行測試 GIF，建議放在 docs/ 目錄 -->
 ![Live Demo](docs/demo.gif)
@@ -96,7 +118,7 @@ Thermal-Testing-GUI/
 
 - Python 3.10 or above
 - Windows 10 / 11 (recommended)
-- Network connection to the testing machine (`192.168.1.100:1500`), **or** use simulation mode
+- Network connection to the testing machine, **or** use simulation mode
 
 ### Installation
 

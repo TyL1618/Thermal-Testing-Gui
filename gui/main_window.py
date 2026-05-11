@@ -1,14 +1,68 @@
 """
-main_window.py  ─  Thermal Testing System 主視窗（含登入 / 使用者列）
+main_window.py  ─  GOTECH HV3000 主視窗（含登入 / 使用者列）
 """
 from PyQt6.QtWidgets import (
     QMainWindow, QTabWidget, QWidget, QLabel, QHBoxLayout,
-    QStatusBar, QMessageBox, QPushButton, QVBoxLayout,
+    QStatusBar, QMessageBox, QPushButton, QVBoxLayout, QFrame,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 
-from core.machine import TestingMachine
+from core.machine import GotechMachine
+
+
+class ReconnectOverlay(QWidget):
+    """
+    斷線時覆蓋在主視窗上的半透明倒數提示。
+    連線成功後呼叫 hide() 隱藏。
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setStyleSheet("background: rgba(8, 10, 13, 180);")
+
+        lay = QVBoxLayout(self)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self._icon = QLabel("⚠️")
+        self._icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._icon.setStyleSheet("font-size:48px; background:transparent;")
+        lay.addWidget(self._icon)
+
+        self._title = QLabel("連線中斷")
+        self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._title.setStyleSheet(
+            "color:#ffc233; font-size:20px; font-weight:700;"
+            "font-family:'Consolas','Courier New',monospace;"
+            "letter-spacing:4px; background:transparent;"
+        )
+        lay.addWidget(self._title)
+
+        self._countdown = QLabel("")
+        self._countdown.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._countdown.setStyleSheet(
+            "color:#b0bcd4; font-size:13px;"
+            "font-family:'Consolas','Courier New',monospace;"
+            "letter-spacing:2px; background:transparent; margin-top:8px;"
+        )
+        lay.addWidget(self._countdown)
+        self.hide()
+
+    def show_countdown(self, seconds: int):
+        self._countdown.setText(f"將在  {seconds}  秒後重新連線...")
+        self.show()
+        self.raise_()
+
+    def show_connecting(self):
+        self._title.setText("正在連線...")
+        self._icon.setText("🔄")
+        self._countdown.setText("")
+        self.show()
+        self.raise_()
+
+    def reset(self):
+        self._title.setText("連線中斷")
+        self._icon.setText("⚠️")
 
 C = {
     'bg_deep':   '#080a0d',
@@ -30,13 +84,13 @@ TAB_LOGIN   = 3
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, machine: TestingMachine):
+    def __init__(self, machine: GotechMachine):
         super().__init__()
         self.machine = machine
         self._current_user: str = ""        # 帳號
         self._current_display: str = ""     # 顯示名稱
 
-        self.setWindowTitle("Thermal Testing System  ─  HDT / VICAT")
+        self.setWindowTitle("HDT / VICAT  Testing System")
         self.resize(1600, 960)
         self._setup_style()
         self._setup_user_bar()   # ← 右上角使用者列（放在 tab 之前建立）
@@ -46,7 +100,12 @@ class MainWindow(QMainWindow):
 
         self.machine.status_updated.connect(self._on_status)
         self.machine.connected.connect(self._on_connected)
+        self.machine.reconnecting.connect(self._on_reconnecting)
         self.machine.connect()
+
+        # ── 斷線重連 Overlay（蓋在所有 widget 上面）
+        self._overlay = ReconnectOverlay(self)
+        self._overlay.setGeometry(self.rect())
 
     # ────────────────────────────────────────
     def _setup_style(self):
@@ -223,16 +282,25 @@ class MainWindow(QMainWindow):
     def _on_status(self, msg: str):
         self.statusBar().showMessage(msg)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, '_overlay'):
+            self._overlay.setGeometry(self.rect())
+
+    def _on_reconnecting(self, seconds: int):
+        """machine 倒數重連時更新 overlay"""
+        self._overlay.reset()
+        self._overlay.show_countdown(seconds)
+
     def _on_connected(self, ok: bool):
         if ok:
+            self._overlay.hide()
             self.statusBar().showMessage(
                 f"CONNECTED  ─  {self.machine.host}:{self.machine.port}"
             )
         else:
-            self.statusBar().showMessage("CONNECTION  FAILED")
-            QMessageBox.warning(
-                self, "Connection Failed",
-                f"Cannot connect to machine.\n"
-                f"Host: {self.machine.host}:{self.machine.port}\n\n"
-                "Check network and IP settings.",
-            )
+            # 連線失敗：overlay 會由 _on_reconnecting 倒數顯示
+            # 這裡只更新 status bar，不再彈 QMessageBox
+            self._overlay.reset()
+            self._overlay.show_connecting()
+            self.statusBar().showMessage("CONNECTION FAILED  ─  RETRYING...")

@@ -1,5 +1,5 @@
 """
-monitor_panel.py  ─  Thermal Testing System 主監控面板
+monitor_panel.py  ─  GOTECH HV3000 主監控面板
 工業精密儀器風格：深碳纖維底色 + 螢光琥珀數字 + 即時波形
 
 修正項目：
@@ -33,7 +33,7 @@ from PyQt6.QtGui import (
 import pyqtgraph as pg
 import pyqtgraph.exporters
 
-from core.machine import TestingMachine, ChannelData
+from core.machine import GotechMachine, ChannelData
 
 
 # ══════════════════════════════════════════════════
@@ -539,7 +539,7 @@ class SaveResultDialog(QDialog):
 class MonitorPanel(QWidget):
     test_finished = pyqtSignal(object)   # 傳出 TestRecord 給 ReportPanel
 
-    def __init__(self, machine: TestingMachine):
+    def __init__(self, machine: GotechMachine):
         super().__init__()
         self.machine = machine
         self.ch_cards: List[ChannelCard] = []

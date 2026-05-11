@@ -1,5 +1,6 @@
 """
-setup_panel.py  
+setup_panel.py  ─  GOTECH HV3000 測試設定頁面
+
 功能：
   1. 測試方法管理（HDT-ISO / HDT_CNS / Special / VICAT-ASTM / HDT-ISO2）
   2. 測試規範、撓曲值、反向應力、速率、負載單位設定
@@ -25,7 +26,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 
-from core.machine import TestingMachine
+from core.machine import GotechMachine
 
 # ── 色彩（與 monitor_panel 一致）
 C = {
@@ -243,7 +244,7 @@ class SetupPanel(QWidget):
     """測試設定主面板"""
     methods_changed = pyqtSignal(dict)  # 傳出最新 methods dict 給其他頁面使用
 
-    def __init__(self, machine: TestingMachine):
+    def __init__(self, machine: GotechMachine):
         super().__init__()
         self.machine = machine
         # 深複製預設方法
